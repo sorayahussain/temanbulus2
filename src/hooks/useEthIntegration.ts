@@ -1,13 +1,6 @@
-// src/hooks/useEthereumIntegration.ts
 import { useState, useEffect } from 'react'
-import { ethers } from 'ethers'
+import { EthereumService } from '../services/ethereumService'
 import { Pet, AdoptedPet } from '../types/Pet'
-
-// You need to replace these with your Ethereum smart contract details
-const ETH_CONTRACT_ADDRESS = '0xYourEthereumContractAddress'
-const ETH_CONTRACT_ABI = [
-  // Your ABI here
-]
 
 declare global {
   interface Window {
@@ -16,9 +9,10 @@ declare global {
 }
 
 export const useEthereumIntegration = () => {
-  const [provider, setProvider] = useState<ethers.BrowserProvider | null>(null)
-  const [signer, setSigner] = useState<ethers.Signer | null>(null)
-  const [contract, setContract] = useState<ethers.Contract | null>(null)
+  const [ethereumService] = useState(() => new EthereumService(
+    import.meta.env.VITE_ETHEREUM_CONTRACT_ADDRESS,
+    import.meta.env.VITE_ETHEREUM_RPC_URL
+  ))
   const [isConnected, setIsConnected] = useState(false)
   const [loading, setLoading] = useState(false)
   const [adoptedPets, setAdoptedPets] = useState<AdoptedPet[]>([])
@@ -36,29 +30,27 @@ export const useEthereumIntegration = () => {
 
     setLoading(true)
     setError('')
-
+    
     try {
-      console.log('🚀 Connecting to Ethereum via MetaMask...')
-      const ethProvider = new ethers.BrowserProvider(window.ethereum)
-      await ethProvider.send('eth_requestAccounts', [])
-      const ethSigner = await ethProvider.getSigner()
-      const address = await ethSigner.getAddress()
-
-      setProvider(ethProvider)
-      setSigner(ethSigner)
+      console.log('🚀 Connecting to Ethereum...')
+      
+      await ethereumService.connect(window.ethereum, {
+        chainId: import.meta.env.VITE_ETHEREUM_CHAIN_ID,
+        rpcUrl: import.meta.env.VITE_ETHEREUM_RPC_URL
+      })
+      
+      const address = await ethereumService.getCurrentAccount()
+      if (!address) {
+        throw new Error('Failed to get wallet address')
+      }
+      
       setUserAddress(address)
       setIsConnected(true)
-
-      const ethContract = new ethers.Contract(
-        ETH_CONTRACT_ADDRESS,
-        ETH_CONTRACT_ABI,
-        ethSigner
-      )
-      setContract(ethContract)
-
-      console.log('✅ Connected to Ethereum:', address)
-
-      await loadAdoptedPets(address, ethContract)
+      
+      console.log('✅ Wallet connected successfully:', address)
+      
+      await loadAdoptedPets(address)
+      
     } catch (error: any) {
       console.error('❌ Ethereum wallet connection failed:', error)
       setError(error.message || 'Failed to connect wallet')
@@ -69,48 +61,54 @@ export const useEthereumIntegration = () => {
     }
   }
 
-  const loadAdoptedPets = async (address: string, instance: ethers.Contract | null = contract) => {
-    if (!instance) return
+  const loadAdoptedPets = async (address: string) => {
     try {
-      console.log('📋 Loading adopted pets from Ethereum for:', address)
-      // TODO: Replace with your contract’s read method
-      const pets: AdoptedPet[] = [] // mock or fetched data
+      console.log('📋 Loading adopted pets for:', address)
+      const pets = await ethereumService.getAdoptedPets(address)
       setAdoptedPets(pets)
     } catch (error) {
-      console.error('Failed to load Ethereum adopted pets:', error)
+      console.error('Failed to load adopted pets:', error)
     }
   }
 
   const adoptPetVirtually = async (pet: Pet) => {
-    if (!isConnected || !contract) {
-      throw new Error('Please connect your Ethereum wallet first')
+    if (!isConnected) {
+      throw new Error('Please connect your wallet first')
     }
-
+    
     setLoading(true)
     setError('')
-
+    
     try {
       console.log('🐾 Adopting pet on Ethereum:', pet.name)
-      // TODO: Replace with your contract's write method
-      // Example:
-      // const tx = await contract.adoptPet(pet.id, pet.name, { value: ethers.parseEther("0.01") })
-      // await tx.wait()
+      
+      const result = await ethereumService.adoptPetSoulbound({
+        petId: pet.id,
+        name: pet.name,
+        petType: pet.type,
+        emoji: pet.emoji || (pet.type === 'cat' ? '🐱' : pet.type === 'dog' ? '🐶' : pet.type === 'rabbit' ? '🐰' : '🐦'),
+        adoptionPrice: '0'
+      })
 
-      const newPet: AdoptedPet = {
+      const newAdoptedPet: AdoptedPet = {
         id: pet.id,
         name: pet.name,
         type: pet.type,
-        emoji: pet.emoji || '🐾',
+        emoji: pet.emoji || (pet.type === 'cat' ? '🐱' : pet.type === 'dog' ? '🐶' : pet.type === 'rabbit' ? '🐰' : '🐦'),
         adoptedDate: new Date().toISOString(),
-        nftTokenId: 'mock-token-id',
-        roflAgentId: `rofl-${pet.id}-${Date.now()}`,
+        nftTokenId: result.tokenId,
         mood: 'happy'
       }
 
-      setAdoptedPets(prev => [...prev, newPet])
-      console.log('✅ Pet adopted successfully on Ethereum')
+      setAdoptedPets(prev => [...prev, newAdoptedPet])
+      
+      console.log('✅ Pet adopted successfully:', result)
+      console.log(`🔍 Check Ethereum Explorer: ${import.meta.env.VITE_ETHEREUM_EXPLORER_URL}/tx/${result.txHash}`)
+      
+      return result
+      
     } catch (error: any) {
-      console.error('❌ Ethereum pet adoption failed:', error)
+      console.error('❌ Pet adoption on Ethereum failed:', error)
       setError(error.message || 'Failed to adopt pet')
       throw error
     } finally {
@@ -118,83 +116,26 @@ export const useEthereumIntegration = () => {
     }
   }
 
-  const makeDonation = async (petId: string, amountEth: string) => {
-    if (!isConnected || !contract) {
-      throw new Error('Please connect your Ethereum wallet first')
-    }
-
-    setLoading(true)
-    setError('')
-
-    try {
-      console.log('💝 Making Ethereum donation:', { petId, amountEth })
-      // TODO: Replace with your contract's donation method
-      // const tx = await contract.donateToPet(petId, { value: ethers.parseEther(amountEth) })
-      // await tx.wait()
-
-      setAdoptedPets(prev =>
-        prev.map(pet =>
-          pet.id === petId
-            ? {
-                ...pet,
-                lastDonationDate: new Date().toISOString(),
-                totalDonations: (pet.totalDonations || 0) + parseFloat(amountEth)
-              }
-            : pet
-        )
-      )
-
-      console.log('✅ Donation successful on Ethereum')
-    } catch (error: any) {
-      console.error('❌ Ethereum donation failed:', error)
-      setError(error.message || 'Failed to make donation')
-      throw error
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const updatePetMood = (petId: string, mood: string) => {
-    setAdoptedPets(prev =>
-      prev.map(pet => (pet.id === petId ? { ...pet, mood } : pet))
-    )
-  }
-
   useEffect(() => {
     const checkConnection = async () => {
-      if (isMetaMaskAvailable()) {
+      if (isMetaMaskAvailable() && ethereumService.isConnected()) {
         try {
-          const ethProvider = new ethers.BrowserProvider(window.ethereum)
-          const accounts = await ethProvider.listAccounts()
-          if (accounts.length > 0) {
-            const ethSigner = await ethProvider.getSigner()
-            const address = await ethSigner.getAddress()
-            setProvider(ethProvider)
-            setSigner(ethSigner)
+          const address = await ethereumService.getCurrentAccount()
+          if (address) {
             setUserAddress(address)
             setIsConnected(true)
-
-            const ethContract = new ethers.Contract(
-              ETH_CONTRACT_ADDRESS,
-              ETH_CONTRACT_ABI,
-              ethSigner
-            )
-            setContract(ethContract)
-            await loadAdoptedPets(address, ethContract)
+            await loadAdoptedPets(address)
           }
         } catch {
           console.log('No existing Ethereum connection found')
         }
       }
     }
-
     checkConnection()
   }, [])
 
   return {
-    provider,
-    signer,
-    contract,
+    ethereumService,
     isConnected,
     loading,
     adoptedPets,
@@ -203,8 +144,6 @@ export const useEthereumIntegration = () => {
     isMetaMaskAvailable,
     connectWallet,
     adoptPetVirtually,
-    makeDonation,
-    updatePetMood,
     loadAdoptedPets
   }
 }
